@@ -3,7 +3,7 @@
 #include "synthB_State.h"
 #include "synthB_Engine.h"
 #include "synthB_Control.h"
-
+#include "synthPreset.h"
 // =========================================================================
 // synthB_Lws.h — Layer LWS del SynthB
 // =========================================================================
@@ -13,6 +13,64 @@
 //   - Nessun broadcast Poly
 //   - I CMD MIDI *_V arrivano con voice sempre 0 (ignorata)
 // =========================================================================
+
+// -------------------------------------------------------------------------
+// PRESET ENTRY HANDLER — SynthB (tutti i parametri sono globali al chip)
+// -------------------------------------------------------------------------
+static void synthB_presetEntry(uint8_t key, uint8_t len, const uint8_t* value) {
+    switch (key) {
+        // ---------- uint8 ----------
+        case K_MODE:          if (len>=1) { mode=presetRd8(value);     wavetable_setup(); } break;
+        case K_WAVEFORM:      if (len>=1) { waveform=presetRd8(value); wavetable_setup(); } break;
+        case K_FM_SELECT:     if (len>=1) fmSel=presetRd8(value); break;
+        case K_OTTAVA:        if (len>=1) {
+                                  ottava = presetRd8(value);
+                                  oct_sw = (ottava==1)?1 : (ottava==3)?4 : 2;
+                              } break;
+        case K_ATTENUA:       if (len>=1) attenua     = presetRd8(value); break;
+        case K_BEND_UP:       if (len>=1) bendMaxUp   = presetRd8(value); break;
+        case K_BEND_DOWN:     if (len>=1) bendMaxDown = presetRd8(value); break;
+        case K_ADSR_A:        if (len>=1) aux_adsr_a  = presetRd8(value); break;
+        case K_ADSR_D:        if (len>=1) aux_adsr_d  = presetRd8(value); break;
+        case K_ADSR_S:        if (len>=1) aux_adsr_s  = presetRd8(value); break;
+        case K_ADSR_R:        if (len>=1) aux_adsr_r  = presetRd8(value); break;
+        case K_SYNTHB_MODE:   if (len>=1) {
+                                  synthBMode = presetRd8(value) ? 1 : 0;
+                                  onAllNotesOff();
+                              } break;
+
+        // ---------- uint16 ----------
+        case K_MOD_IN_B:      if (len>=2) modInB = presetRd16(value); break;
+        case K_MOD_LEV:       if (len>=2) {
+                                  modLev  = presetRd16(value);
+                                  modLevA = modLev - (modLev*2);
+                              } break;
+        case K_PITCH_LEV:     if (len>=2) {
+                                  modPitchLev  = presetRd16(value);
+                                  modPitchLevA = modPitchLev - (modPitchLev*2);
+                              } break;
+
+        // ---------- uint32 ----------
+        case K_LFO_RATE:      if (len>=4) speedMod      = presetRd32(value); break;
+        case K_PITCH_RATE:    if (len>=4) speedPitchMod = presetRd32(value); break;
+        case K_SLIDE_TIME:    if (len>=4) {
+                                  uint32_t t = presetRd32(value);
+                                  if (t > 1000) t = 1000;
+                                  slideTimeMs = t;
+                              } break;
+
+        // ---------- FM operator ----------
+        case K_FM_SIN_0:      if (len>=2) fmSetSin[fmSel][0]=(float)(int16_t)presetRd16(value)/100.0f; break;
+        case K_FM_SIN_1:      if (len>=2) fmSetSin[fmSel][1]=(float)(int16_t)presetRd16(value)/100.0f; break;
+        case K_FM_SIN_2:      if (len>=2) fmSetSin[fmSel][2]=(float)(int16_t)presetRd16(value)/100.0f; break;
+        case K_FM_DIV_0:      if (len>=2) fmSetDiv[fmSel][0] = presetRd16(value); break;
+        case K_FM_DIV_1:      if (len>=2) fmSetDiv[fmSel][1] = presetRd16(value); break;
+        case K_FM_DIV_2:      if (len>=2) fmSetDiv[fmSel][2] = presetRd16(value); break;
+
+        default:
+            break;
+    }
+}
 
 // -------------------------------------------------------------------------
 // 1. CALLBACK APPLICATIVI — CMD_PARAM (uint8)
@@ -271,7 +329,55 @@ static void dispatchLocal(const LwsFrame& f) {
                 on_midi_cc_v((char)f.data[0], f.data[1],
                              f.data[2], f.data[3]);
             break;
+        // ---------- PRESET TRANSFER ----------
+        case CMD_PRESET_BEGIN:
+            if (f.len >= 5) {
+                uint8_t voice = f.data[1];
+                uint8_t id    = f.data[2];
+                uint16_t len  = (uint16_t)f.data[3] | ((uint16_t)f.data[4] << 8);
+                uint8_t status;
+                if (len > PRESET_MAX_LEN) {
+                    status = PRESET_ACK_LEN_FAIL;
+                } else {
+                    presetBegin(voice, id, len);
+                    status = PRESET_ACK_OK;
+                }
+                uint8_t ack[3] = { f.data[0], voice, status };
+                lws_send_frame(LWS_PORT, MCU_ID, lws_next_seq(),
+                               CMD_PRESET_ACK, ack, 3);
+                LWS_DEBUG.printf("[B] preset BEGIN voice=%u len=%u -> %u\n",
+                                 voice, len, status);
+            }
+            break;
 
+        case CMD_PRESET_CHUNK:
+            if (f.len >= 5) {
+                uint8_t voice = f.data[1];
+                uint16_t off  = (uint16_t)f.data[2] | ((uint16_t)f.data[3] << 8);
+                uint8_t dlen  = f.len - 4;
+                presetChunk(voice, off, &f.data[4], dlen);
+            }
+            break;
+
+        case CMD_PRESET_END:
+            if (f.len >= 3) {
+                uint8_t voice = f.data[1];
+                uint8_t crc   = f.data[2];
+                uint8_t st    = presetEnd(voice, crc);
+                if (st == PRESET_ACK_OK) {
+                    uint8_t rc = presetApply(synthB_presetEntry);
+                    if (rc != 0) st = rc;
+                }
+                uint8_t ack[3] = { f.data[0], voice, st };
+                lws_send_frame(LWS_PORT, MCU_ID, lws_next_seq(),
+                               CMD_PRESET_ACK, ack, 3);
+                LWS_DEBUG.printf("[B] preset END voice=%u -> %u\n", voice, st);
+            }
+            break;
+
+        case CMD_PRESET_READ:
+            // (fase 2)
+            break;
         case CMD_ERROR: {
             char msg[64] = {0};
             if (f.len >= 2) {
