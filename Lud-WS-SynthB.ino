@@ -1,7 +1,7 @@
 // =====================================================================
-// Lud-WS-SynthB — RP2040 synth parafonico a 6 slot, nodo LWS
+// Lud-WS-SynthB — RP2350  synth parafonico a 6 slot, nodo LWS
 // =====================================================================
-// REV 1 (LWS integration)
+// Ver, 0.1.2
 //
 // ARCHITETTURA
 // ---------------------------------------------------------------------
@@ -22,18 +22,75 @@
 //
 // =====================================================================
 
+// ---------------------------------------------------------------------
+// 1. Include base
+// ---------------------------------------------------------------------
 #include <Arduino.h>
 #include <hardware/pwm.h>
 #include <EEPROM.h>
 
 #include "synthB_Config.h"
-#include "ottaveB.h"           // tabelle numeriche (ripulito)
+#include "ottaveB.h"
 
 #include "serial_protocol.h"
 #include "comunicazioni_mcu.h"
 
-#include "synthB_State.h"
+// ---------------------------------------------------------------------
+// 2. DRIVER TLC5628 (inline, definito qui per essere visibile ai moduli)
+// ---------------------------------------------------------------------
+// DAC octal 8-bit, interfaccia seriale a 3 fili (DATA / CLK / LOAD).
+// Parola 11 bit MSB-first: [A2 A1 A0 D7..D0]
+// ---------------------------------------------------------------------
 
+// Canali DAC
+#define TLC_CH_VCF1     0    // OUTA → cutoff VCF1
+#define TLC_CH_VCF2     1    // OUTB → cutoff VCF2
+#define TLC_CH_VCF3     2    // OUTC → cutoff VCF3
+#define TLC_CH_RES      3    // OUTD → resonance
+#define TLC_CH_SUSTAIN  4    // OUTE → sustain voltage
+// OUTF, OUTG, OUTH → riservati
+
+// Scrittura singolo canale
+static inline void tlcWrite(uint8_t channel, uint8_t value) {
+    channel &= 0x07;
+    uint16_t word = ((uint16_t)channel << 8) | (uint16_t)value;
+
+    digitalWrite(PIN_TLC_LOAD, LOW);
+    for (int i = 10; i >= 0; i--) {
+        digitalWrite(PIN_TLC_CLK, LOW);
+        digitalWrite(PIN_TLC_DATA, (word >> i) & 1);
+        digitalWrite(PIN_TLC_CLK, HIGH);
+    }
+    digitalWrite(PIN_TLC_LOAD, HIGH);
+    delayMicroseconds(1);
+}
+
+// Init
+static inline void initTlc5628() {
+    pinMode(PIN_TLC_DATA, OUTPUT);
+    pinMode(PIN_TLC_CLK,  OUTPUT);
+    pinMode(PIN_TLC_LOAD, OUTPUT);
+
+    digitalWrite(PIN_TLC_DATA, LOW);
+    digitalWrite(PIN_TLC_CLK,  LOW);
+    digitalWrite(PIN_TLC_LOAD, HIGH);
+
+    // Reset: tutti i canali a metà scala
+    for (uint8_t ch = 0; ch < 8; ch++) tlcWrite(ch, 128);
+
+    LWS_DEBUG.println("[B] TLC5628 init OK");
+}
+
+// ---------------------------------------------------------------------
+// 3. Moduli funzionali (usano tlcWrite, perciò inclusi dopo il driver)
+// ---------------------------------------------------------------------
+#include "synthB_State.h"
+#include "synthB_Engine.h"
+#include "synthB_Control.h"
+#include "synthB_AnalogEnv.h"
+#include "synthB_Lfo3.h"
+#include "synthB_Vcf.h"
+#include "synthB_Lws.h"
 // ---------------------------------------------------------------------
 // Definizione delle variabili dichiarate in synthB_State.h
 // ---------------------------------------------------------------------
@@ -53,7 +110,7 @@ const float levArr[21] = {
 };
 
 // --- Costanti globali ---
-const float masterFreq    = 4.0f;
+const float masterFreq    = PWM_CLKDIV_BASE;
 const float f0            = 30.0f;
 float       calb          = 6.58f;
 const float sampleLev     = 551.0f;
@@ -101,11 +158,18 @@ uint32_t slideTimeMs = 200;
 // --- Modalità ---
 uint8_t synthBMode = 0;   // 0=mono, 1=poly
 
-// --- ADSR ausiliario ---
-uint8_t aux_adsr_a = 10;
-uint8_t aux_adsr_d = 30;
-uint8_t aux_adsr_s = 200;
-uint8_t aux_adsr_r = 40;
+// --- ADSR digitale ausiliario (vir) ---
+uint8_t vir_adsr_a = 10;
+uint8_t vir_adsr_d = 30;
+uint8_t vir_adsr_s = 200;
+uint8_t vir_adsr_r = 40;
+
+// --- ADSR hardware (ana) ---
+uint8_t ana_attack    = 0;      // ch 4051
+uint8_t ana_decay     = 0;
+uint16_t ana_sustain   = 512;    // 0..1023
+uint8_t ana_release   = 0;
+uint8_t ana_env_mode  = 0;      // 0=ADSR
 
 // --- Preset ---
 uint8_t presetSel  = 0;
@@ -135,13 +199,6 @@ int   mod2_wavetable[256] = {};
 // --- AM ---
 int      am_k     = 0;
 uint32_t am_timer = 0;
-
-// ---------------------------------------------------------------------
-// Include moduli funzionali
-// ---------------------------------------------------------------------
-#include "synthB_Engine.h"
-#include "synthB_Control.h"
-#include "synthB_Lws.h"
 
 // ---------------------------------------------------------------------
 // SETUP
@@ -182,6 +239,10 @@ void setup() {
         glideCurrent[i]   = 0.0f;
         glideStep[i]      = 0.0f;
     }
+	
+	initAnalogEnv();
+	initTlc5628();
+	initLfo3();
 
     wavetable_setup();
 
@@ -206,7 +267,9 @@ void setup() {
 void loop() {
     // --- LWS poll ---
     pollLws();
-
+	lfo3Tick();
+analogEnvUpdate();
+applyPitchModulation();
     // --- Calcolo "mod" (globale) ---
     int tmpmod = modIn + modInB;
     tmpmod = (tmpmod > 1023) ? 1023 : tmpmod;
@@ -221,4 +284,125 @@ void loop() {
 
     // --- LFO tick ---
     lfoTick();
+}
+// =========================================================================
+// CORE 1 — Rigenerazione wavetable modulata (mode 0=WF, 1=FM, 2=AM)
+// =========================================================================
+// Il core 1 gira in background e aggiorna continuamente mod2_wavetable[]
+// in base a mode, waveform e mod (calcolati dal core 0).
+// =========================================================================
+
+volatile bool g_wt_busy = false;   // true = wavetable in riscrittura
+
+void setup1() {
+    // niente da inizializzare
+}
+
+void loop1() {
+    while (true) {
+
+        // ---------- WAVEFOLD ----------
+        if (mode == 0) {
+            g_wt_busy = true;
+            if (waveform == 2) {
+                // SQR: PWM
+                int modInt = (int)mod;
+                if (modInt < 0)   modInt = 0;
+                if (modInt > 250) modInt = 250;
+                for (int i = 0; i < 128 + modInt; i++)
+                    mod2_wavetable[i] = 511;
+                for (int i = 128 + modInt; i < 256; i++)
+                    mod2_wavetable[i] = -511;
+            } else {
+                for (int i = 0; i < 256; i++)
+                    mod_wavetable[i] = wavetable[i] * mod;
+                for (int i = 0; i < 256; i++) {
+                    float m = mod_wavetable[i];
+                    if      (m >  511 && m <  1535) mod2_wavetable[i] =  1024 - (int)m;
+                    else if (m < -512 && m > -1536) mod2_wavetable[i] = -1023 - (int)m;
+                    else if (m < -1535)             mod2_wavetable[i] =  2048 + (int)m;
+                    else if (m >  1534)             mod2_wavetable[i] =  (int)m - 2047;
+                    else                            mod2_wavetable[i] =  (int)m;
+                }
+            }
+            g_wt_busy = false;
+        }
+
+        // ---------- FM ----------
+        else if (mode == 1) {
+            g_wt_busy = true;
+            float mm = mod;
+            for (int i = 0; i < 256; i++) {
+                float out = 0.0f;
+                switch (waveform) {
+                    case 0:
+                        out = sinf(PIx2*i/256
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][0]*i/fmSetDiv[fmSel][0]
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][1]*i/fmSetDiv[fmSel][1]
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][2]*i/fmSetDiv[fmSel][2])))) * 511;
+                        break;
+                    case 1:
+                        out = (sinf(PIx2*i/256 + mm/128*sinf(PIx2*fmSetSin[fmSel][0]*i/fmSetDiv[fmSel][0]))
+                             + sinf(PIx2*fmSetSin[fmSel][1]*i/fmSetDiv[fmSel][1]
+                             + mm/128*sinf(PIx2*fmSetSin[fmSel][2]*i/fmSetDiv[fmSel][2]))) * 250;
+                        break;
+                    case 2:
+                        out = sinf(PIx2*i/256
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][0]*i/fmSetDiv[fmSel][0]
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][1]*i/fmSetDiv[fmSel][1]
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][2]*i/fmSetDiv[fmSel][2])))) * 511;
+                        break;
+                    case 3:
+                        out = sinf(PIx2*i/256
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][0]*i/fmSetDiv[fmSel][0]
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][1]*i/fmSetDiv[fmSel][1]
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][2]*i/fmSetDiv[fmSel][2])))) * 511;
+                        break;
+                    case 4:
+                        out = (sinf(PIx2*i/256 + mm/128*sinf(PIx2*fmSetSin[fmSel][0]*i/fmSetDiv[fmSel][0]))
+                             + sinf(PIx2*fmSetSin[fmSel][1]*i/fmSetDiv[fmSel][1]
+                             + mm/128*sinf(PIx2*fmSetSin[fmSel][2]*i/fmSetDiv[fmSel][2]))) * 250;
+                        break;
+                    case 5:
+                        out = (sinf(PIx2*i/256 + mm/128*sinf(PIx2*fmSetSin[fmSel][0]*i/fmSetDiv[fmSel][0]))
+                             + sinf(PIx2*fmSetSin[fmSel][1]*i/fmSetDiv[fmSel][1]
+                             + mm/128*sinf(PIx2*fmSetSin[fmSel][2]*i/fmSetDiv[fmSel][2]))) * 250;
+                        break;
+                    case 6:
+                        out = sinf(PIx2*i/256
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][0]*i/fmSetDiv[fmSel][0]
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][1]*i/fmSetDiv[fmSel][1]
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][2]*i/fmSetDiv[fmSel][2])))) * 511;
+                        break;
+                    case 7:
+                        out = sinf(PIx2*i/256
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][0]*i/fmSetDiv[fmSel][0]
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][1]*i/fmSetDiv[fmSel][1]
+                            + mm/128 * sinf(PIx2*fmSetSin[fmSel][2]*i/fmSetDiv[fmSel][2])))) * 511;
+                        break;
+                    default:
+                        out = sinf(PIx2*i/256) * 511;
+                        break;
+                }
+                mod2_wavetable[i] = (int)out;
+            }
+            g_wt_busy = false;
+        }
+
+        // ---------- AM ----------
+        else if (mode == 2) {
+            uint32_t now = micros();
+            if ((now - am_timer) >= (uint32_t)mod) {
+                g_wt_busy = true;
+                am_k = (am_k < 63) ? am_k + 1 : 0;
+                float sinVal = sinf(PIx2 * am_k / 63.0f);
+                for (int i = 0; i < 256; i++)
+                    mod2_wavetable[i] = (int)(wavetable[i] * sinVal);
+                am_timer = now;
+                g_wt_busy = false;
+            }
+        }
+
+        delayMicroseconds(200);   // pausa per non saturare core 1
+    }
 }

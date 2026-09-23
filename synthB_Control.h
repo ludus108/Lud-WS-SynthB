@@ -1,7 +1,7 @@
 #pragma once
 #include "synthB_Config.h"
 #include "synthB_State.h"
-
+#include "synthB_Engine.h"
 // =========================================================================
 // synthB_Control.h — Modulazioni (LFO mod + LFO pitch)
 // =========================================================================

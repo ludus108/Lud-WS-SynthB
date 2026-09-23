@@ -1,6 +1,7 @@
 #pragma once
 #include "synthB_Config.h"
 #include "synthB_State.h"
+#include "synthB_AnalogEnv.h"
 
 // =========================================================================
 // synthB_Engine.h — Motore audio del SynthB
@@ -59,7 +60,7 @@ static inline void auxAdsr_tick() {
             auxEnvLevel = 0.0f;
             break;
         case AUX_ENV_ATTACK: {
-            float t = auxAdsrTimeSeconds(aux_adsr_a);
+            float t = auxAdsrTimeSeconds(vir_adsr_a);
             if (t < 1e-4f) {
                 auxEnvLevel = 1.0f;
                 auxEnvState = AUX_ENV_DECAY;
@@ -77,8 +78,8 @@ static inline void auxAdsr_tick() {
             break;
         }
         case AUX_ENV_DECAY: {
-            float t    = auxAdsrTimeSeconds(aux_adsr_d);
-            float sLev = (float)aux_adsr_s / 255.0f;
+            float t    = auxAdsrTimeSeconds(vir_adsr_d);
+            float sLev = (float)vir_adsr_s / 255.0f;
             if (t < 1e-4f) {
                 auxEnvLevel = sLev;
                 auxEnvState = AUX_ENV_SUSTAIN;
@@ -94,10 +95,10 @@ static inline void auxAdsr_tick() {
             break;
         }
         case AUX_ENV_SUSTAIN:
-            auxEnvLevel = (float)aux_adsr_s / 255.0f;
+            auxEnvLevel = (float)vir_adsr_s / 255.0f;
             break;
         case AUX_ENV_RELEASE: {
-            float t = auxAdsrTimeSeconds(aux_adsr_r);
+            float t = auxAdsrTimeSeconds(vir_adsr_r);
             if (t < 1e-4f) {
                 auxEnvLevel = 0.0f;
                 auxEnvState = AUX_ENV_IDLE;
@@ -403,13 +404,33 @@ static void polyNoteOff(uint8_t pitch) {
 // 8. DISPATCH NOTE ON/OFF (mono vs poly)
 // -------------------------------------------------------------------------
 static void onNoteOn(uint8_t pitch, uint8_t velocity) {
-    if (synthBMode == 0) monoNoteOn(pitch, velocity);
-    else                 polyNoteOn(pitch, velocity);
+    bool wasSilent;
+    if (synthBMode == 0) {
+        wasSilent = (noteCount == 0);
+        monoNoteOn(pitch, velocity);
+    } else {
+        bool anyActive = false;
+        for (int i = 0; i < POLIMAX; i++)
+            if (noteOnArr[i] != 0) { anyActive = true; break; }
+        wasSilent = !anyActive;
+        polyNoteOn(pitch, velocity);
+    }
+    if (wasSilent) analogEnvNoteOn();
 }
 
 static void onNoteOff(uint8_t pitch) {
-    if (synthBMode == 0) monoNoteOff(pitch);
-    else                 polyNoteOff(pitch);
+    if (synthBMode == 0) {
+        monoNoteOff(pitch);
+        // In mono: noteCount diventa 0 → release
+        if (noteCount == 0) analogEnvNoteOff();
+    } else {
+        polyNoteOff(pitch);
+        // In poly: controlla se ci sono ancora note attive
+        bool anyActive = false;
+        for (int i = 0; i < POLIMAX; i++)
+            if (noteOnArr[i] != 0) { anyActive = true; break; }
+        if (!anyActive) analogEnvNoteOff();
+    }
 }
 
 static void onAllNotesOff() {

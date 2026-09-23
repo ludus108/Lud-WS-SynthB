@@ -27,16 +27,32 @@
 #define LWS_BAUD       115200UL
 
 // -------------------------------------------------------------------------
-// 3. PIN HARDWARE
+// PIN HARDWARE
 // -------------------------------------------------------------------------
-#define OUTPUT_A_PIN   15      // PWM audio
-// OUTPUT_ON_PIN: non definito per ora, aggiunto quando si conosceranno
-// le periferiche (verrà dal nuovo hardware)
+#define OUTPUT_A_PIN     15    // PWM audio
+
+// ADSR hardware — pin diretti
+#define PIN_ANA_ATTACK   2     // → 4066
+#define PIN_ANA_DECAY    3     // → 4066
+#define PIN_ANA_RELEASE  4     // → 4066
+#define PIN_4051_A       5     // → CD4051 A
+#define PIN_4051_B       6     // → CD4051 B
+#define PIN_4051_C       7     // → CD4051 C
+#define PIN_ADC_ENV      26    // ADC0 envelope feedback
+#define K_WOV_ENV_SRC      'g'   // uint8: 0=ADSR digitale (vir), 1=ADSR hardware (ana)
 
 // -------------------------------------------------------------------------
 // 4. COSTANTI MOTORE
 // -------------------------------------------------------------------------
-#define PWM_IRQ_RATE_HZ   30000.0f   // ~freq IRQ con clkdiv=4, wrap=1023
+#if defined(PICO_RP2350) || defined(ARDUINO_ARCH_RP2350)
+  #define PWM_CLKDIV_BASE   4.8f
+#else
+  #define PWM_CLKDIV_BASE   4.0f
+#endif
+
+#define PWM_IRQ_RATE_HZ   30500.0f
+
+// old #define PWM_IRQ_RATE_HZ   30000.0f   // ~freq IRQ con clkdiv=4, wrap=1023
 
 #define MAX_PITCH         127
 #define NOTE_STACK_MAX    8           // per-mono
@@ -71,6 +87,13 @@
 #endif
 
 // -------------------------------------------------------------------------
+// TLC5628 (DAC octal 8-bit, SPI a 3 fili)
+// -------------------------------------------------------------------------
+#define PIN_TLC_DATA   8
+#define PIN_TLC_CLK    9
+#define PIN_TLC_LOAD   10
+
+// -------------------------------------------------------------------------
 // 6. CHIAVI LWS — GLOBALI CHIP (CMD_PARAM)
 // -------------------------------------------------------------------------
 // Formato: [target='B'][key][value]
@@ -83,17 +106,41 @@
 
 // TUNING
 #define K_OTTAVA          'o'   // 1..3
-#define K_ATTENUA         'a'   // 0..9 (indice attenuaNumArr)
+#define K_ATTENUA         'a'   // 0..9, accettato ma NON applicato (residuo)
 
 // BENDER
 #define K_BEND_UP         'u'   // 0..4
 #define K_BEND_DOWN       'n'   // 0..4
 
-// ADSR ausiliario (parametri accettati ma NON applicati al DCO per ora)
-#define K_ADSR_A          '5'   // 0..255
-#define K_ADSR_D          '6'   // 0..255
-#define K_ADSR_S          '7'   // 0..255
-#define K_ADSR_R          '8'   // 0..255
+// --- ADSR digitale ausiliario (vir) ---
+#define K_VIR_ADSR_A   '5'   // 0..255
+#define K_VIR_ADSR_D   '6'
+#define K_VIR_ADSR_S   '7'
+#define K_VIR_ADSR_R   '8'
+
+// --- ADSR hardware (ana) ---
+#define K_ANA_ADSR_A   'A'   // 0..7 canale 4051
+#define K_ANA_ADSR_D   'D'   // 0..7
+#define K_ANA_ADSR_S   'S'   // 0..255 (mappato in 0..1023)
+#define K_ANA_ADSR_R   'R'   // 0..7
+#define K_ANA_ENV_MODE 'E'   // 0=ADSR, 1=AD
+
+// --- LFO 3 ---
+#define K_LFO3_WAVE     'b'   // 0..7 (uint8)
+#define K_LFO3_SPREAD   'c'   // 0..255 (uint8)
+#define K_LFO3_RATE     'k'   // 350..80000 (int32)
+#define K_LFO3_LEV      'l'   // 0..1023 (int32)
+
+/* // --- ex VCF cutoff base ---
+#define K_VCF1_CUT      'C'   // 0..255 (uint8)
+#define K_VCF2_CUT      'G'   // 0..255 (uint8)
+#define K_VCF3_CUT      'H'   // 0..255 (uint8) */
+
+// --- VCF cutoff base ---
+#define K_VCF1_CUT     '1'   // 0..255
+#define K_VCF2_CUT     '2'   // 0..255
+#define K_VCF3_CUT     '3'   // 0..255
+#define K_VCF_RES      '4'   // 0..255
 
 // MODALITÀ
 #define K_SYNTHB_MODE     'y'   // 0=mono, 1=poly

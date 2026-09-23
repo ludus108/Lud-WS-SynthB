@@ -1,0 +1,296 @@
+================================================================================
+LUD-WS-SYNTHB — RIEPILOGO NODO
+================================================================================
+Sintetizzatore parafonico RP2040, nodo LWS singolo.
+Ultimo aggiornamento: 2026-09-22
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1. IDENTITÀ E ARCHITETTURA
+--------------------------------------------------------------------------------
+
+  MCU_ID          'B'
+  Hardware        RP2040 Zero
+  Ruolo           Synth parafonico a 6 slot (POLIMAX=6)
+  Porta LWS       Serial1 (UART0, GP0/GP1) @ 115200
+  Partner         Router (Pico 2), via SerialPIO GP8/GP9
+
+  Topologia: nodo singolo diretto al Router. Nessuna cascata.
+             Non fa bridge/relay/broadcast.
+
+  Differenza da SynthA:
+    - SynthA  → polifonico a voci indipendenti (5 voci, 2 sub_voci ciascuna)
+    - SynthB  → parafonico, UNA voce sola con 6 slot di polifonia interna
+                e UNA wavetable condivisa da tutti gli slot
+
+
+--------------------------------------------------------------------------------
+2. MODELLO AUDIO
+--------------------------------------------------------------------------------
+
+  POLIMAX = 6 slot parafonici indipendenti.
+  Wavetable UNICA condivisa: wavetable[256], mod_wavetable[256],
+                             mod2_wavetable[256]
+
+  Modi:
+    mono (synthBMode=0):
+      1 nota alla volta. Note stack (priorità alle note premute).
+      Glide tra note consecutive. Fresh note = jump, legato = glide.
+    poly (synthBMode=1):
+      Fino a 6 note contemporanee. Allocazione dinamica su slot libero.
+      Slot steal con glide quando non ci sono slot liberi.
+      Anche in poly lo slide è attivo (ogni slot ha il suo glide).
+
+  Slide:
+    Attivo in mono e poly.
+    Slide time 0..1000 ms. Fresh slot = jump. Stolen = glide.
+
+  DCO:
+    Gate secco (nessun ADSR applicato al DCO).
+
+  Aux ADSR digitale (vir_*):
+    Parametri memorizzati ma NON applicati al DCO (revisione futura).
+
+  ADSR hardware (ana_*):
+    Controlla un envelope esterno via pin diretti (vedi sezione 7).
+
+  Modi sintesi (mode):
+    0 = wavefold
+    1 = FM (8 varianti a 3 operatori)
+    2 = AM
+
+
+--------------------------------------------------------------------------------
+3. PORTE E PIN (RP2040 Zero)
+--------------------------------------------------------------------------------
+
+  LWS (Serial1)   GP0 TX / GP1 RX     @ 115200 (verso Router)
+  PWM audio       GP15
+
+  ADSR hardware (pin diretti):
+    ANA_ATTACK    GP2  → 4066
+    ANA_DECAY     GP3  → 4066
+    ANA_RELEASE   GP4  → 4066
+    4051_A        GP5  → CD4051 pin A
+    4051_B        GP6  → CD4051 pin B
+    4051_C        GP7  → CD4051 pin C
+    ADC_ENV       GP26 (ADC0, feedback envelope)
+
+
+--------------------------------------------------------------------------------
+4. FILE DEL PROGETTO
+--------------------------------------------------------------------------------
+
+  Lud-WS-SynthB/
+  ├── Lud-WS-SynthB.ino      bootstrap, setup, loop, definizione variabili
+  ├── synthB_Config.h        MCU_ID, pin, chiavi K_*
+  ├── synthB_State.h         extern di tutte le variabili globali
+  ├── synthB_Engine.h        IRQ PWM, note stack, alloc slot, glide, aux ADSR
+  ├── synthB_Control.h       LFO mod + pitch
+  ├── synthB_Lws.h           callback, dispatch, preset entry
+  ├── synthB_AnalogEnv.h     controllo ADSR hardware (pin diretti)
+  ├── synthPreset.h          utility preset (buffer K-V, comune a SynthA)
+  ├── ottaveB.h              tabelle noteArr[61], voctpow[1230],
+  │                          bendMaxUpArr[5], bendMaxDownArr[5]
+  ├── serial_protocol.h      condiviso
+  └── comunicazioni_mcu.h    condiviso
+
+
+--------------------------------------------------------------------------------
+5. CHIAVI LWS (target 'B')
+--------------------------------------------------------------------------------
+
+  --- CMD_PARAM (uint8) ---
+  m   mode (0=WF, 1=FM, 2=AM)
+  w   waveform (0..8)
+  F   fm select (0..7)
+  o   ottava (1..3)
+  a   attenua (0..9)
+  u   bend up (0..4)
+  n   bend down (0..4)
+  y   synthB mode (0=mono, 1=poly)
+  !   panic
+  P   preset select (0..29)
+  Q   preset save (0..29)
+
+  --- ADSR digitale ausiliario (vir_*) ---
+  5   vir_adsr_a (0..255)   NON applicato al DCO
+  6   vir_adsr_d (0..255)
+  7   vir_adsr_s (0..255)
+  8   vir_adsr_r (0..255)
+
+  --- ADSR hardware (ana_*) ---
+  A   ana_attack  (0..7, canale 4051)
+  D   ana_decay   (0..7, canale 4051)
+  S   ana_sustain (0..255, mappato in 0..1023)
+  R   ana_release (0..7, canale 4051)
+  E   ana_env_mode (0=ADSR retrigger, 1=AD no-retrigger)
+
+  --- CMD_PARAM_I32 (int32) ---
+  i   modInB (0..1023)
+  I   modLev (0..1023)
+  f   speedMod (350..80000)
+  j   modPitchLev (0..550)
+  J   speedPitchMod (350..80000)
+  h   slide time (0..1000 ms)
+  x X Y   FM sin 0/1/2 (float * 100)
+  q Q W   FM div 0/1/2 (1..600)
+
+  --- CMD_MIDI_NOTE_V ---
+  onoff, pitch, vel → onNoteOn / onNoteOff
+  (voice ignorata: SynthB ha una sola voce logica)
+
+  --- CMD_PRESET_BEGIN/CHUNK/END/ACK ---
+  Formato standard K-V binario con CRC-8.
+
+
+--------------------------------------------------------------------------------
+6. MOTORE AUDIO (synthB_Engine.h)
+--------------------------------------------------------------------------------
+
+  IRQ PWM (on_pwm_wrap):
+    - Per ogni slot attivo: avanza fase, legge mod2_wavetable, somma
+    - Applica aux ADSR tick (calcolo, non applicato al DCO)
+    - Normalizza: levelOut / POLIMAX
+    - Clamp ±512, scrive PWM_CHAN_B
+
+  Note handling:
+    onNoteOn(pitch, vel):
+      mono: monoNoteOn() + analogEnvNoteOn() (se era silenzioso)
+      poly: polyNoteOn() + analogEnvNoteOn() (se era silenzioso)
+    onNoteOff(pitch):
+      mono: monoNoteOff() + analogEnvNoteOff() (se noteCount diventa 0)
+      poly: polyNoteOff() + analogEnvNoteOff() (se tutti gli slot liberi)
+
+  Allocazione slot:
+    poly: findFreeSlot() → se non c'è, findOldestSlot() + steal-glide
+
+  Wavetable setup:
+    wavetable_setup() riscrive la wavetable unica in base a mode+waveform.
+
+
+--------------------------------------------------------------------------------
+7. ADSR HARDWARE (synthB_AnalogEnv.h)
+--------------------------------------------------------------------------------
+
+  Adattato da EnvLudElka_00.ino, con pin diretti (no 74HC595).
+
+  Componenti esterni:
+    CD4051    mux analogico 8 canali → seleziona resistenza A/D/R
+    CD4066    4 switch analogici      → collegano 5V o resistenza
+    ADC0      legge feedback envelope
+
+  State machine:
+    ANA_IDLE → ANA_ATTACK → ANA_DECAY → ANA_SUSTAIN → ANA_RELEASE
+    In mode AD (ana_env_mode=1):
+      ANA_IDLE → ANA_ATTACK → ANA_RELEASE (no sustain)
+      Non retrigger durante una nota in corso.
+
+  Soglie ADC:
+    ANA_ATTACK_THRESHOLD  1000
+    ANA_ZERO_THRESHOLD    10
+
+  Output pin diretti (6 pin: 3 switch + 3 bit 4051).
+  Funzioni:
+    initAnalogEnv()       setup pin
+    analogEnvNoteOn()     chiamato da onNoteOn
+    analogEnvNoteOff()    chiamato da onNoteOff
+    analogEnvUpdate()     chiamato da loop() ogni 1 ms
+
+
+--------------------------------------------------------------------------------
+8. LWS GLUE (synthB_Lws.h)
+--------------------------------------------------------------------------------
+
+  on_param(target, key, value)         → parametri uint8
+  on_param_i32(target, key, value)     → parametri int32
+  on_param_voce(...)                    → wrapper che ignora voice
+  on_param_i32_voce(...)                → idem
+  on_midi_note_v(...)                   → chiama onNoteOn/onNoteOff
+  on_midi_bend_v(...)                   → aggiorna frBend
+  on_midi_cc_v(...)                     → mappa CC base (mod wheel, mod lev)
+
+  dispatchLocal(frame)                  → switch su CMD
+    gestisce: PING, PARAM, PARAM_REL, PARAM_VOCE, PARAM_I32,
+              PARAM_I32_V, MIDI_NOTE_V, MIDI_BEND_V, MIDI_CC_V,
+              PRESET_BEGIN/CHUNK/END/READ, ERROR
+  pollLws()                             → legge Serial1 e chiama dispatch
+
+  synthB_presetEntry(key, len, value)   → applica una entry K-V
+
+
+--------------------------------------------------------------------------------
+9. PRESET
+--------------------------------------------------------------------------------
+
+  Storage su SD del Display:
+    /preset/synthB/preset_00.bin .. preset_29.bin
+    /preset/synthB/nomi_presetB.txt
+
+  Formato binario K-V:
+    [version=0x01]
+    [key][len][value...]   ripetuto
+    [0xFF]
+    [crc8]
+
+  Trasferimento via CMD_PRESET_BEGIN/CHUNK/END/ACK
+  Target 'B', voice sempre 0.
+
+  Il Display ha cache locale (cacheB) che rispecchia lo stato inviato.
+  Al load:
+    1. Display legge .bin
+    2. Popola cache
+    3. Invia blob al SynthB
+  Al save:
+    1. Display serializza cacheB in K-V
+    2. Scrive su SD
+
+  Python generator: genera 30 preset SynthB con 3 template base
+  (Poly Default, Mono Slide, Pluck AD).
+
+
+--------------------------------------------------------------------------------
+10. STATO E PROGRESS
+--------------------------------------------------------------------------------
+
+  [✓] Config, state, engine, control, lws scritti
+  [✓] Motore PWM + mono/poly + slide per-slot
+  [✓] ADSR hardware integrato (pin diretti)
+  [✓] Preset entry + transfer
+  [✓] Chiavi LWS rinominate (vir_*) + aggiunte (ana_*)
+  [ ] Periferiche hardware da definire (encoder/bottoni futuri)
+  [ ] DSP effetti (chiavi accettate, non applicate)
+  [ ] Revisione ADSR (tutti i synth dopo test audio)
+  [ ] Test end-to-end (quando hardware montato)
+
+
+--------------------------------------------------------------------------------
+11. COLLISIONI CMD RISOLTE
+--------------------------------------------------------------------------------
+
+  CMD_PRESET_BEGIN       'j'   (era 'b', collisione con CMD_MIDI_BEND)
+  CMD_PRESET_DUMP_BEGIN  'Q'   (era 'K', collisione con CMD_MIDI_CC_V)
+
+  Gli altri CMD restano invariati.
+
+
+--------------------------------------------------------------------------------
+12. CHECKLIST TEST (a hardware montato)
+--------------------------------------------------------------------------------
+
+  1. Boot: Serial Monitor 115200 → "=== Lud-WS-SynthB ==="
+  2. PING dal Router → log "[B] PONG" → ONLINE sul Display
+  3. Nota singola mono → audio continuo
+  4. Cambio a poly (K_SYNTHB_MODE='y' val=1) → accordo 6 note
+  5. Slide: K_SLIDE_TIME='h' (int32) → glide udibile
+  6. Cambio waveform runtime → timbro cambia senza click
+  7. ADSR hardware: LED su pin A/D/R + oscilloscopio su ADC
+  8. Preset transfer: carica un .bin e verifica il suono
+  9. Panic: K_PANIC='!' → tutte le note off
+ 10. Stress: 100+ note ON/OFF in 5 secondi
+
+
+================================================================================
+FINE RIEPILOGO SYNTHB
+================================================================================

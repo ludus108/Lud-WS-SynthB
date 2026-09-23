@@ -97,13 +97,18 @@ extern uint32_t slideTimeMs;    // 0..1000 (tempo di glide)
 // -------------------------------------------------------------------------
 extern uint8_t synthBMode;      // 0=mono, 1=poly
 
-// -------------------------------------------------------------------------
-// 12. STATO ADSR ausiliario (accettato ma non applicato al DCO)
-// -------------------------------------------------------------------------
-extern uint8_t aux_adsr_a;
-extern uint8_t aux_adsr_d;
-extern uint8_t aux_adsr_s;
-extern uint8_t aux_adsr_r;
+// --- ADSR digitale ausiliario (vir) ---
+extern uint8_t vir_adsr_a;
+extern uint8_t vir_adsr_d;
+extern uint8_t vir_adsr_s;
+extern uint8_t vir_adsr_r;
+
+// --- ADSR hardware (ana) ---
+extern uint8_t ana_attack;    // 0..7 (canale 4051)
+extern uint8_t ana_decay;     // 0..7
+extern uint16_t ana_sustain;   // 0..1023 (livello ADC target)
+extern uint8_t ana_release;   // 0..7
+extern uint8_t ana_env_mode;  // 0=ADSR, 1=AD
 
 // -------------------------------------------------------------------------
 // 13. STATO PRESET

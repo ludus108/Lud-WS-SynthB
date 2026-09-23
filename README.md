@@ -1,12 +1,12 @@
 \# Lud-WS-SynthB
 
+mcu RP2350 zero
+
+V 0.1.2
 
 
-V 0.1.0
 
-
-
-Synth B Para/Mono VCF X3 (CBR Filter), real adsr
+Synth B Para/Mono (7 voci) VCF X3 (CBR Filter), real adsr
 
 
 
