@@ -29,7 +29,11 @@ static inline void on_param(char target, char key, uint8_t value) {
     LWS_DEBUG.printf("[B] PARAM key=%c val=%u\n", key, value);
 
     switch (key) {
-
+case K_FILTER_TYPE:
+    // 0=LP, 1=BP. Se hai un pin di selezione LP/BP, pilotа qui.
+    // Per ora scrive sul TLC5628 canale 5 come "spare output".
+    tlcWrite(5, (value == 0) ? 0 : 255);
+    break;
         // ---------- MODE / WAVEFORM ----------
 		case K_WOV_ENV_SRC:
     wovEnvSrc = (value != 0) ? 1 : 0;
@@ -414,56 +418,178 @@ static void pollLws() {
 // 7. PRESET ENTRY HANDLER
 // -------------------------------------------------------------------------
 // Chiamato una volta per ogni entry K-V del preset.
+// Gestisce TUTTE le chiavi definite in synthB_Config.h + quelle
+// aggiunte dai moduli (Vcf, Lfo3, AnalogEnv).
 // -------------------------------------------------------------------------
 static void synthB_presetEntry(uint8_t key, uint8_t len, const uint8_t* value) {
 
     switch (key) {
-case K_WOV_ENV_SRC:
-    if (len>=1) wovEnvSrc = (presetRd8(value) != 0) ? 1 : 0;
-    break;
-        // ---------- uint8: mode / waveform / tuning ----------
-        case K_MODE:          if (len>=1) { mode = presetRd8(value);       wavetable_setup(); } break;
-        case K_WAVEFORM:      if (len>=1) { waveform = presetRd8(value);   wavetable_setup(); } break;
-        case K_FM_SELECT:     if (len>=1) fmSel = presetRd8(value); break;
-        case K_OTTAVA:        if (len>=1) {
-                                  ottava = presetRd8(value);
-                                  oct_sw = (ottava==1)?1 : (ottava==3)?4 : 2;
-                              } break;
-        case K_ATTENUA:       if (len>=1) attenua = presetRd8(value); break;
-        case K_BEND_UP:       if (len>=1) bendMaxUp   = presetRd8(value); break;
-        case K_BEND_DOWN:     if (len>=1) bendMaxDown = presetRd8(value); break;
 
-        // ---------- ADSR digitale ----------
-        case K_VIR_ADSR_A:    if (len>=1) vir_adsr_a = presetRd8(value); break;
-        case K_VIR_ADSR_D:    if (len>=1) vir_adsr_d = presetRd8(value); break;
-        case K_VIR_ADSR_S:    if (len>=1) vir_adsr_s = presetRd8(value); break;
-        case K_VIR_ADSR_R:    if (len>=1) vir_adsr_r = presetRd8(value); break;
+        // ==================== MODE / WAVEFORM ====================
+        case K_MODE:
+            if (len>=1) { mode = presetRd8(value); wavetable_setup(); }
+            break;
 
-        // ---------- ADSR hardware ----------
-        case K_ANA_ADSR_A:    if (len>=1) ana_attack  = constrain(presetRd8(value), 0, 7); break;
-        case K_ANA_ADSR_D:    if (len>=1) ana_decay   = constrain(presetRd8(value), 0, 7); break;
-        case K_ANA_ADSR_R:    if (len>=1) ana_release = constrain(presetRd8(value), 0, 7); break;
-        case K_ANA_ADSR_S:    if (len>=1) {
-                                  uint8_t v = presetRd8(value);
-                                  ana_sustain = map(v, 0, 255, 0, 1023);
-                                  tlcWrite(TLC_CH_SUSTAIN, v);
-                              } break;
-        case K_ANA_ENV_MODE:  if (len>=1) ana_env_mode = (presetRd8(value) != 0) ? 1 : 0; break;
+        case K_WAVEFORM:
+            if (len>=1) { waveform = presetRd8(value); wavetable_setup(); }
+            break;
 
-        // ---------- VCF cutoff / res (via TLC) ----------
-        case K_VCF1_CUT:      if (len>=1) { vcf1Base = presetRd8(value);
-                                            tlcWrite(TLC_CH_VCF1, vcf1Base); } break;
-        case K_VCF2_CUT:      if (len>=1) { vcf2Base = presetRd8(value);
-                                            tlcWrite(TLC_CH_VCF2, vcf2Base); } break;
-        case K_VCF3_CUT:      if (len>=1) { vcf3Base = presetRd8(value);
-                                            tlcWrite(TLC_CH_VCF3, vcf3Base); } break;
-        case K_VCF_RES:       if (len>=1) tlcWrite(TLC_CH_RES, presetRd8(value)); break;
+        case K_FM_SELECT:
+            if (len>=1) fmSel = presetRd8(value);
+            break;
 
-        // ---------- LFO3 ----------
-        case K_LFO3_WAVE:     if (len>=1) lfo3Wave   = constrain(presetRd8(value), 0, 7); break;
-        case K_LFO3_SPREAD:   if (len>=1) lfo3Spread = presetRd8(value); break;
+        // ==================== TUNING ====================
+        case K_OTTAVA:
+            if (len>=1) {
+                ottava = presetRd8(value);
+                oct_sw = (ottava==1)?1 : (ottava==3)?4 : 2;
+            }
+            break;
 
-        // ---------- Modo (mono/poly) ----------
+        case K_ATTENUA:
+            if (len>=1) attenua = presetRd8(value);
+            break;
+
+        // ==================== BENDER ====================
+        case K_BEND_UP:
+            if (len>=1) bendMaxUp = presetRd8(value);
+            break;
+
+        case K_BEND_DOWN:
+            if (len>=1) bendMaxDown = presetRd8(value);
+            break;
+
+        // ==================== ADSR DIGITALE (vir_*) ====================
+        case K_VIR_ADSR_A:
+            if (len>=1) vir_adsr_a = presetRd8(value);
+            break;
+        case K_VIR_ADSR_D:
+            if (len>=1) vir_adsr_d = presetRd8(value);
+            break;
+        case K_VIR_ADSR_S:
+            if (len>=1) vir_adsr_s = presetRd8(value);
+            break;
+        case K_VIR_ADSR_R:
+            if (len>=1) vir_adsr_r = presetRd8(value);
+            break;
+
+        // ==================== ADSR HARDWARE (ana_*) ====================
+        case K_ANA_ADSR_A:
+            if (len>=1) ana_attack = constrain(presetRd8(value), 0, 7);
+            break;
+        case K_ANA_ADSR_D:
+            if (len>=1) ana_decay = constrain(presetRd8(value), 0, 7);
+            break;
+        case K_ANA_ADSR_R:
+            if (len>=1) ana_release = constrain(presetRd8(value), 0, 7);
+            break;
+        case K_ANA_ADSR_S: {
+            if (len>=1) {
+                uint8_t v = presetRd8(value);
+                ana_sustain = map(v, 0, 255, 0, 1023);
+                tlcWrite(TLC_CH_SUSTAIN, v);
+            }
+            break;
+        }
+        case K_ANA_ENV_MODE:
+            if (len>=1) ana_env_mode = (presetRd8(value) != 0) ? 1 : 0;
+            break;
+
+        // ==================== VCF — FILTER/WOVEL MODE ====================
+        case K_VCF_MODE:
+            if (len>=1) {
+                vcfMode = (presetRd8(value) != 0) ? 1 : 0;
+                vcfRefresh();
+            }
+            break;
+
+        case K_VCF_SUBMODE:
+            if (len>=1) {
+                vcfSubMode = constrain(presetRd8(value), 0, 2);
+                vcfRefresh();
+            }
+            break;
+
+        // ==================== VCF — CUT / RES ====================
+        case K_VCF1_CUT:
+            if (len>=1) { vcf1Cut = presetRd8(value); vcfRefresh(); }
+            break;
+        case K_VCF2_CUT:
+            if (len>=1) { vcf2Cut = presetRd8(value); vcfRefresh(); }
+            break;
+        case K_VCF3_CUT:
+            if (len>=1) { vcf3Cut = presetRd8(value); vcfRefresh(); }
+            break;
+        case K_VCF_RES:
+            if (len>=1) tlcWrite(TLC_CH_RES, presetRd8(value));
+            break;
+
+        // ==================== VCF — LP/BP filter type ====================
+        case K_FILTER_TYPE:
+            if (len>=1) {
+                sB_filter_type = (presetRd8(value) != 0) ? 1 : 0;
+                // Scrive su TLC canale 5 (spare) come indicatore
+                tlcWrite(5, (sB_filter_type == 0) ? 0 : 255);
+            }
+            break;
+
+        // ==================== WOVEL ====================
+        case K_WOV_VOWEL_A:
+            if (len>=1) { wovVowelA = presetRd8(value); vcfRefresh(); }
+            break;
+        case K_WOV_VOWEL_B:
+            if (len>=1) { wovVowelB = presetRd8(value); vcfRefresh(); }
+            break;
+        case K_WOV_MORPH:
+            if (len>=1) { wovMorph = presetRd8(value); vcfRefresh(); }
+            break;
+        case K_WOV_FORMANT:
+            if (len>=4) {
+                wovFormant = constrain((int32_t)presetRd32(value), 0, 500);
+                vcfRefresh();
+            }
+            break;
+
+        case K_WOV_SUBMODE:
+            if (len>=1) {
+                wovSubMode = constrain(presetRd8(value), 0, 2);
+                if (wovSubMode == WOV_SUB_RANDOM) wovRandomOnNoteOn();
+            }
+            break;
+
+        case K_WOV_ENV_VOWEL_C:
+            if (len>=1) wovEnvVowelC = vowelIdx(presetRd8(value));
+            break;
+
+        case K_WOV_ENV_ATTACK:
+            if (len>=1) wovEnvAttack = presetRd8(value);
+            break;
+
+        case K_WOV_ENV_SRC:
+            if (len>=1) wovEnvSrc = (presetRd8(value) != 0)
+                                    ? WOV_ENV_SRC_ANA
+                                    : WOV_ENV_SRC_VIR;
+            break;
+
+        case K_WOV_RND_TIME_MS:
+            if (len>=4) wovRndTimeMs = constrain((int32_t)presetRd32(value), 0, 5000);
+            break;
+
+        // ==================== LFO3 ====================
+        case K_LFO3_WAVE:
+            if (len>=1) lfo3Wave = constrain(presetRd8(value), 0, 7);
+            break;
+        case K_LFO3_SPREAD:
+            if (len>=1) lfo3Spread = presetRd8(value);
+            break;
+        case K_LFO3_RATE:
+            if (len>=4) lfo3Rate = constrain((int32_t)presetRd32(value), 350, 80000);
+            break;
+        case K_LFO3_LEV:
+            if (len>=4) lfo3Lev = constrain((int32_t)presetRd32(value), 0, 1023);
+            break;
+
+        // ==================== MODE (mono/poly) ====================
         case K_SYNTHB_MODE:
             if (len>=1) {
                 synthBMode = presetRd8(value) ? 1 : 0;
@@ -471,34 +597,70 @@ case K_WOV_ENV_SRC:
             }
             break;
 
-        // ---------- int32 / uint16 ----------
-        case K_MOD_IN_B:      if (len>=2) modInB = presetRd16(value); break;
-        case K_MOD_LEV:       if (len>=2) {
-                                  modLev  = presetRd16(value);
-                                  modLevA = modLev - (modLev*2);
-                              } break;
-        case K_PITCH_LEV:     if (len>=2) {
-                                  modPitchLev  = presetRd16(value);
-                                  modPitchLevA = modPitchLev - (modPitchLev*2);
-                              } break;
+        // ==================== LFO MOD (int32) ====================
+        case K_MOD_IN_B:
+            if (len>=2) modInB = presetRd16(value);
+            break;
+        case K_MOD_LEV:
+            if (len>=2) {
+                modLev  = presetRd16(value);
+                modLevA = modLev - (modLev * 2);
+            }
+            break;
+        case K_LFO_RATE:
+            if (len>=4) speedMod = presetRd32(value);
+            break;
 
-        case K_LFO_RATE:      if (len>=4) speedMod      = presetRd32(value); break;
-        case K_PITCH_RATE:    if (len>=4) speedPitchMod = presetRd32(value); break;
-        case K_SLIDE_TIME:    if (len>=4) {
-                                  uint32_t t = presetRd32(value);
-                                  if (t > 1000) t = 1000;
-                                  slideTimeMs = t;
-                              } break;
-        case K_LFO3_RATE:     if (len>=4) lfo3Rate = constrain((int32_t)presetRd32(value), 350, 80000); break;
-        case K_LFO3_LEV:      if (len>=4) lfo3Lev  = constrain((int32_t)presetRd32(value), 0, 1023); break;
+        // ==================== LFO PITCH ====================
+        case K_PITCH_LEV:
+            if (len>=2) {
+                modPitchLev  = presetRd16(value);
+                modPitchLevA = modPitchLev - (modPitchLev * 2);
+            }
+            break;
+        case K_PITCH_RATE:
+            if (len>=4) speedPitchMod = presetRd32(value);
+            break;
 
-        // ---------- FM operator ----------
-        case K_FM_SIN_0:      if (len>=2) fmSetSin[fmSel][0] = (float)(int16_t)presetRd16(value)/100.0f; break;
-        case K_FM_SIN_1:      if (len>=2) fmSetSin[fmSel][1] = (float)(int16_t)presetRd16(value)/100.0f; break;
-        case K_FM_SIN_2:      if (len>=2) fmSetSin[fmSel][2] = (float)(int16_t)presetRd16(value)/100.0f; break;
-        case K_FM_DIV_0:      if (len>=2) fmSetDiv[fmSel][0] = presetRd16(value); break;
-        case K_FM_DIV_1:      if (len>=2) fmSetDiv[fmSel][1] = presetRd16(value); break;
-        case K_FM_DIV_2:      if (len>=2) fmSetDiv[fmSel][2] = presetRd16(value); break;
+        // ==================== SLIDE ====================
+        case K_SLIDE_TIME: {
+            if (len>=4) {
+                uint32_t t = presetRd32(value);
+                if (t > 1000) t = 1000;
+                slideTimeMs = t;
+                for (int i = 0; i < POLIMAX; i++) {
+                    if (glideActive[i]) computeGlideStep((uint8_t)i);
+                }
+            }
+            break;
+        }
+
+        // ==================== FM OPERATOR (int16) ====================
+        case K_FM_SIN_0:
+            if (len>=2) fmSetSin[fmSel][0] = (float)(int16_t)presetRd16(value)/100.0f;
+            break;
+        case K_FM_SIN_1:
+            if (len>=2) fmSetSin[fmSel][1] = (float)(int16_t)presetRd16(value)/100.0f;
+            break;
+        case K_FM_SIN_2:
+            if (len>=2) fmSetSin[fmSel][2] = (float)(int16_t)presetRd16(value)/100.0f;
+            break;
+        case K_FM_DIV_0:
+            if (len>=2) fmSetDiv[fmSel][0] = presetRd16(value);
+            break;
+        case K_FM_DIV_1:
+            if (len>=2) fmSetDiv[fmSel][1] = presetRd16(value);
+            break;
+        case K_FM_DIV_2:
+            if (len>=2) fmSetDiv[fmSel][2] = presetRd16(value);
+            break;
+
+        // ==================== SISTEMA (ignorati nei preset) ====================
+        case K_PANIC:
+        case K_PRESET_SEL:
+        case K_PRESET_SAVE:
+            // Comandi runtime, non parametri di preset
+            break;
 
         default:
             // chiave sconosciuta: ignora silenziosamente

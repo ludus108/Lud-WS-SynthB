@@ -96,7 +96,7 @@ extern uint32_t slideTimeMs;    // 0..1000 (tempo di glide)
 // 11. STATO MODALITÀ
 // -------------------------------------------------------------------------
 extern uint8_t synthBMode;      // 0=mono, 1=poly
-
+extern uint8_t filterType;   // 0=LP, 1=BP
 // --- ADSR digitale ausiliario (vir) ---
 extern uint8_t vir_adsr_a;
 extern uint8_t vir_adsr_d;

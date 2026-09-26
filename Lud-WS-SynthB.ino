@@ -94,7 +94,7 @@ static inline void initTlc5628() {
 // ---------------------------------------------------------------------
 // Definizione delle variabili dichiarate in synthB_State.h
 // ---------------------------------------------------------------------
-
+uint8_t filterType = 0;
 // --- Tabelle FM ---
 float fmSetSin[8][3] = {};
 int   fmSetDiv[8][3] = {};
