@@ -4,7 +4,7 @@
 .pio/
 .pioenvs/
 .piolibdeps/
-.vscode
+
 # ==========================
 # BUILD FILES
 # ==========================
@@ -44,3 +44,4 @@ Thumbs.db
 # FILE DI CONFIGURAZIONE LOCALE
 # ==========================
 # (aggiungi qui eventuali file con path assoluti personali)
+/.vscode
