@@ -20,7 +20,7 @@ static void synthB_presetEntry(uint8_t key, uint8_t len, const uint8_t* value);
 //
 // Usa tlcWrite() e TLC_CH_* definite inline nel .ino.
 // =========================================================================
-
+void dumpStatus();   // definita in main.cpp
 // -------------------------------------------------------------------------
 // 1. CALLBACK — CMD_PARAM (uint8)
 // -------------------------------------------------------------------------
@@ -29,7 +29,13 @@ static inline void on_param(char target, char key, uint8_t value) {
     LWS_DEBUG.printf("[B] PARAM key=%c val=%u\n", key, value);
 
     switch (key) {
-case K_FILTER_TYPE:
+		
+		        // ---------- DUMP STATUS ----------
+    case '?':
+            dumpStatus();
+    break;
+	
+	case K_FILTER_TYPE:
     // 0=LP, 1=BP. Se hai un pin di selezione LP/BP, pilotа qui.
     // Per ora scrive sul TLC5628 canale 5 come "spare output".
     tlcWrite(5, (value == 0) ? 0 : 255);
@@ -524,12 +530,11 @@ static void synthB_presetEntry(uint8_t key, uint8_t len, const uint8_t* value) {
             if (len>=1) tlcWrite(TLC_CH_RES, presetRd8(value));
             break;
 
-        // ==================== VCF — LP/BP filter type ====================
+             // ==================== VCF — LP/BP filter type ====================
         case K_FILTER_TYPE:
             if (len>=1) {
-                sB_filter_type = (presetRd8(value) != 0) ? 1 : 0;
-                // Scrive su TLC canale 5 (spare) come indicatore
-                tlcWrite(5, (sB_filter_type == 0) ? 0 : 255);
+                filterType = (presetRd8(value) != 0) ? 1 : 0;
+                tlcWrite(5, (filterType == 0) ? 0 : 255);
             }
             break;
 
@@ -658,7 +663,6 @@ static void synthB_presetEntry(uint8_t key, uint8_t len, const uint8_t* value) {
         // ==================== SISTEMA (ignorati nei preset) ====================
         case K_PANIC:
         case K_PRESET_SEL:
-        case K_PRESET_SAVE:
             // Comandi runtime, non parametri di preset
             break;
 

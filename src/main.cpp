@@ -199,7 +199,121 @@ int   mod2_wavetable[256] = {};
 // --- AM ---
 int      am_k     = 0;
 uint32_t am_timer = 0;
+// ===== STATISTICHE PER dumpStatus() =====
+uint32_t g_frameFromRouter = 0;
+uint32_t g_frameFromChain  = 0;
+uint32_t g_pongSent        = 0;
+uint32_t g_presetApplied   = 0;
 
+// Forward declaration
+void dumpStatus();
+void dumpStatus() {
+    // ===== HEADER =====
+    Serial.println();
+    Serial.println("[DUMP] ========== SYNTHB STATUS ==========");
+    Serial.printf("[DUMP] mcu=%c uptime=%lu ms\n", MCU_ID, millis());
+    Serial.printf("[DUMP] polimax=%d\n", POLIMAX);
+
+    // ===== TRAFFIC =====
+    Serial.println("[DUMP] --- TRAFFIC ---");
+    Serial.printf("[DUMP] frame_from_router=%lu\n", g_frameFromRouter);
+    Serial.printf("[DUMP] frame_from_chain=%lu\n",  g_frameFromChain);
+    Serial.printf("[DUMP] pong_sent=%lu\n",         g_pongSent);
+    Serial.printf("[DUMP] preset_applied=%lu\n",    g_presetApplied);
+
+    // ===== MODE / SELECTIONS =====
+    Serial.println("[DUMP] --- MODE ---");
+    Serial.printf("[DUMP] mode=%u waveform=%u fmSel=%u\n",
+                  mode, waveform, fmSel);
+    Serial.printf("[DUMP] ottava=%u oct_sw=%u attenua=%u synthBMode=%u\n",
+                  ottava, oct_sw, attenua, synthBMode);
+    Serial.printf("[DUMP] filterType=%u presetSel=%u presetSave=%u\n",
+                  filterType, presetSel, presetSave);
+    Serial.printf("[DUMP] calb=%.2f masterFreq=%.2f f0=%.2f\n",
+                  calb, masterFreq, f0);
+
+    // ===== ENVELOPES =====
+    Serial.println("[DUMP] --- ENVELOPES ---");
+    Serial.printf("[DUMP] vir_adsr A=%u D=%u S=%u R=%u\n",
+                  vir_adsr_a, vir_adsr_d, vir_adsr_s, vir_adsr_r);
+    Serial.printf("[DUMP] ana_attack=%u ana_decay=%u ana_sustain=%u ana_release=%u\n",
+                  ana_attack, ana_decay, ana_sustain, ana_release);
+    Serial.printf("[DUMP] ana_env_mode=%u slideTimeMs=%lu\n",
+                  ana_env_mode, slideTimeMs);
+
+    // ===== MODULATION =====
+    Serial.println("[DUMP] --- MODULATION ---");
+    Serial.printf("[DUMP] modIn=%d modInB=%d modLev=%d modLevA=%d\n",
+                  modIn, modInB, modLev, modLevA);
+    Serial.printf("[DUMP] modPitchLev=%d modPitchLevA=%d\n",
+                  modPitchLev, modPitchLevA);
+    Serial.printf("[DUMP] speedMod=%lu speedPitchMod=%lu\n",
+                  speedMod, speedPitchMod);
+    Serial.printf("[DUMP] frBend=%.3f frMod=%.3f\n", frBend, frMod);
+    Serial.printf("[DUMP] bendMaxUp=%u bendMaxDown=%u\n",
+                  bendMaxUp, bendMaxDown);
+
+    // ===== VOICES =====
+    Serial.println("[DUMP] --- VOICES ---");
+    for (int i = 0; i < POLIMAX; i++) {
+        Serial.printf("[DUMP] slot%d note=%u freq=%d osc=%.2f glide=%u (cur=%.2f tgt=%.2f step=%.4f)\n",
+                      i,
+                      noteOnArr[i],
+                      noteOnFreqArr[i],
+                      osc_freq[i],
+                      glideActive[i],
+                      glideCurrent[i],
+                      glideTarget[i],
+                      glideStep[i]);
+    }
+
+    // ===== NOTE STACK / CURRENT =====
+    Serial.printf("[DUMP] noteCount=%u currentNote=%u stack=[",
+                  noteCount, currentNote);
+    for (int i = 0; i < noteCount && i < NOTE_STACK_MAX; i++) {
+        Serial.printf("%u", noteStack[i]);
+        if (i < noteCount - 1) Serial.print(",");
+    }
+    Serial.println("]");
+
+    // ===== FM OPERATORS =====
+    Serial.println("[DUMP] --- FM OPERATORS ---");
+    for (int p = 0; p < 8; p++) {
+        Serial.printf("[DUMP] fm[%d] sin=%.2f,%.2f,%.2f div=%d,%d,%d\n",
+                      p,
+                      fmSetSin[p][0], fmSetSin[p][1], fmSetSin[p][2],
+                      fmSetDiv[p][0], fmSetDiv[p][1], fmSetDiv[p][2]);
+    }
+
+    // ===== LFO3 =====
+    Serial.println("[DUMP] --- LFO3 ---");
+    Serial.printf("[DUMP] lfo3Wave=%u spread=%u rate=%ld lev=%ld\n",
+                  lfo3Wave, lfo3Spread, (long)lfo3Rate, (long)lfo3Lev);
+    Serial.printf("[DUMP] lfo3Mod=[%d,%d,%d] basePhase=%u\n",
+                  lfo3Mod[0], lfo3Mod[1], lfo3Mod[2], lfo3BasePhase);
+
+    // ===== VCF / WOVEL =====
+    Serial.println("[DUMP] --- VCF / WOVEL ---");
+    Serial.printf("[DUMP] vcfCut F1=%u F2=%u F3=%u\n",
+                  vcf1Cut, vcf2Cut, vcf3Cut);
+    Serial.printf("[DUMP] vcfMode=%u vcfSubMode=%u\n",
+                  vcfMode, vcfSubMode);
+    Serial.printf("[DUMP] wovVowelA=%u wovVowelB=%u wovMorph=%u wovSubMode=%u\n",
+                  wovVowelA, wovVowelB, wovMorph, wovSubMode);
+    Serial.printf("[DUMP] wovFormant=%ld wovEnvSrc=%u wovEnvAttack=%u\n",
+                  (long)wovFormant, wovEnvSrc, wovEnvAttack);
+    Serial.printf("[DUMP] wovEnvVowel A=%u B=%u C=%u\n",
+                  wovEnvVowelA, wovEnvVowelB, wovEnvVowelC);
+
+    // ===== PRESET =====
+    Serial.println("[DUMP] --- PRESET ---");
+    Serial.printf("[DUMP] presetActive=%d voice=%u id=%u len=%u rcvd=%u\n",
+                  presetActive, presetVoice, presetId, presetLen, presetRcvd);
+
+    // ===== FOOTER =====
+    Serial.println("[DUMP] ==========================================");
+    Serial.println();
+}
 // ---------------------------------------------------------------------
 // SETUP
 // ---------------------------------------------------------------------
@@ -265,6 +379,10 @@ void setup() {
 // LOOP
 // ---------------------------------------------------------------------
 void loop() {
+	   if (Serial.available()) {
+        char c = Serial.read();
+        if (c == '?') dumpStatus();
+    }
     // --- LWS poll ---
     pollLws();
 	lfo3Tick();

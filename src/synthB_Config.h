@@ -157,7 +157,17 @@
 // -------------------------------------------------------------------------
 // Formato: [target='B'][key][i32_le]
 // -------------------------------------------------------------------------
+// --- VCF / WOVEL mode ---
+#define K_VCF_MODE        'B'   // 0=Filter, 1=Wovel
+#define K_VCF_SUBMODE     'C'   // 0=Uni, 1=Slave, 2=Free
 
+// --- WOVEL (vocali) ---
+#define K_WOV_VOWEL_A     'V'   // 0..4
+#define K_WOV_VOWEL_B     'Z'   // 0..4
+#define K_WOV_ENV_VOWEL_C 'L'   // 0..4
+#define K_WOV_MORPH       'U'   // 0..255 (morph in modalità pot)
+#define K_WOV_SUBMODE     'K'   // 0..2
+#define K_WOV_ENV_ATTACK  'M'   // 0..255
 // LFO mod
 #define K_MOD_IN_B        'i'   // 0..1023
 #define K_MOD_LEV         'I'   // 0..1023
@@ -177,3 +187,6 @@
 #define K_FM_DIV_0        'q'   // int, 1..600
 #define K_FM_DIV_1        'Q'
 #define K_FM_DIV_2        'W'
+// WOVEL — parametri int32
+#define K_WOV_FORMANT     'G'   // 0..500 (int32)
+#define K_WOV_RND_TIME_MS 'H'   // 0..5000 (int32)
