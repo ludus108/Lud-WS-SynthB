@@ -4,7 +4,7 @@
 .pio/
 .pioenvs/
 .piolibdeps/
-
+.vscode
 # ==========================
 # BUILD FILES
 # ==========================
